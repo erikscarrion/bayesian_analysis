@@ -1,2 +1,2 @@
 # bayesian_analysis
-EdX Bayesian Analysis - Introduction &amp; Advanced
+All code files generated as part of the edx courses: Introduction to Bayesian Statistics & Advanced Bayesian Statistics
