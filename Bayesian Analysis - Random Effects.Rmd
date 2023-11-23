@@ -1,0 +1,90 @@
+---
+title: "Mixed Effects Modelling"
+author: "Erik Carrion"
+date: "2023-04-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+
+```{r}
+# Load dependencies and data
+library(tidyverse)
+library(MCMCglmm)
+d <- read.csv("BP.csv")
+str(d)
+summary(d)
+```
+
+## Priors for the mixed effects model
+
+```{r cars}
+priors <- list(
+  # Mean and Var for Normal Prior on Fixed Effects
+  B = list(mu = c(0,0), V=diag(2)*1000),
+  # Residual Variance,
+  R = list(V = 1, nu = .002),
+  # Random Effects Prior
+  G = list(G1 = list(V=1, nu=.002))
+)
+```
+
+## Model Specification
+```{r pressure, echo=FALSE}
+model <- MCMCglmm(BP ~ Group, random =~PID,
+                  data = d, prior = priors, 
+                  nitt = 10000, burnin = 1000,
+                  thin = 10, pr = T, verbose=F)
+```
+
+## What does the model tell us?
+```{r}
+summary(model)
+```
+## Plotting Diagnostics
+```{r}
+plot(model)
+```
+## What do the individual patients looks like? 
+```{r}
+mdf <- data.frame(PID = factor(1:10),
+                  xi.mean = apply(model$Sol[,3:12],2,mean),
+                  xi.lo = apply(model$Sol[,3:12],2,quantile, .025),
+                  xi.hi = apply(model$Sol[,3:12],2,quantile, .975))
+
+mdf %>% ggplot(aes(x = PID, y = xi.mean)) + 
+  geom_segment(aes(y = xi.lo, xend = PID, yend=xi.hi)) +
+  geom_point()+ ylab(expression(xi)) + geom_abline(aes(intercept=0,slope=0), col="red")
+  
+```
+## Checking Posterior Probabilities
+What is the posterior probability that patient 2 has the lowest BP out of all patients?
+
+```{r}
+# This method compares patient 2 against all other patients and takes the mean
+# of the means
+pid2 <- numeric(9)
+pat2 <- model$Sol[,4]
+for(i in 1:9){
+  x = i+2
+  patient.i = model$Sol[,x]
+  pid2
+  if(x != 4){
+    pid2[i] = mean(pat2 < patient.i)
+  }
+}
+pid2
+mean(pid2) # This answer is incorrect
+```
+```{r}
+# What if we tried a different way?
+mean(model$Sol[,4] < model$Sol[,3:12])
+
+# This answer is correct. It tells us the mean probability that 2 is lower than all - and that 
+# has to include patient number 2. 
+```
+

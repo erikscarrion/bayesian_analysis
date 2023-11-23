@@ -1,0 +1,206 @@
+---
+title: "Advanced Bayesian Statistics - Latent Variables"
+output: html_notebook
+---
+
+N = 100
+X = # of days out of 7 the experimental unit drank alcohol last week
+    X = c(0,1,2,3,4,5,6,7)
+    
+    X ~ Binomial(7, p)
+        p ~ Beta(1 + sum(X), 1 + 7*sum(z) - sum(X))
+
+Z = 0|1 depending on if a person is a drinker or not a drinker
+    
+    Z ~ Bernoulli(w)
+        w ~ Beta(1 + sum(Z), 1 + 100 - sum(Z))
+
+Steps of the Gibbs Sampler:
+  0: Initialize values for w, p, Z
+  1: Given Z, sample w from rbeta(1, 1 + sum(Z), 1 + 100 - sum(Z))
+  2. Given Z and X, sample p from rbeta(1, 1 + sum(X), 1 + 7*sum(z) - sum(X))
+  3. Given, w, p, & X, sample z from rbernoulli(100, 1, p)
+      # Before doing so, we need to determine p = p(z==1)
+  4. Repeat steps 2 and 3 until you reach convergence
+
+
+```{r}
+# Load dependencies
+library(tidyverse)
+library(gridExtra)
+```
+
+Load Data, Initialize Values
+```{r}
+
+X <- rep(0:6, c(22,6,18,23,18,10,3))
+Z <- 1*(X>=1)
+
+n.iter = 10^3
+
+```
+
+Gibbs Sampler for the distribution of w, p, Z:
+```{r}
+
+# Monitors for w, z, and p
+mon.w <- mon.p <- numeric(n.iter)
+mon.Z <- array(dim = c(100, n.iter))
+
+# Set the seed
+set.seed(4242, sample.kind = "Rounding")
+
+# Begin looping
+for(i in 1:n.iter){
+  # Given Z, sample w
+  a.w <- 1 + sum(Z)
+  b.w <- 1 + 100 - sum(Z)
+  w <- rbeta(1, a.w, b.w)
+  
+  q.w <- 1-w
+  
+  # given Z,X sample p
+  a.p <- 1 + sum(X)
+  b.p <- 1 + 7*sum(Z) - sum(X)
+  p <- rbeta(1, a.p, b.p)
+  
+  q.p = 1-p
+  
+  # Given w, p, X, sample Z
+  
+  # p(z==1) = p(z==1|x>=1)*p(x>=1) + p(z==1|x==0)*p(x==0)
+  pz1 <- 1*mean((X>=1)) + (w*q.p^7/(q.w + w*q.p^7)) * mean((X==0))
+         
+  # Sample Z
+  Z = rbinom(100, pz1)
+  
+  # Assign to storage monitors
+  mon.w[i] <- w
+  mon.p[i] <- p
+  mon.Z[,i] <- Z
+  
+}
+
+```
+
+After running the sampler we are able to inspect the trace plots and the distributions of W and P
+In addition, we'll be able to inspect the means of the Zs
+
+```{r}
+
+# Create a dataframe to pass to ggplot
+
+df <- data.frame(iter = 1:n.iter,
+                 w = mon.w,
+                 p = mon.p)
+# create the plots for w and p
+trace.w <- df %>%  ggplot(aes(iter, w)) + geom_line() + ggtitle("Trace of w")
+dens.w <- df %>%  ggplot(aes(w)) + geom_density() + ggtitle("Density of w")
+trace.p <- df %>%  ggplot(aes(iter, p)) + geom_line() + ggtitle("Trace of p")
+dens.p <- df %>%  ggplot(aes(p)) + geom_density() + ggtitle("Density of p")
+
+# Grid Arrange
+plots <- list(trace.w, dens.w, trace.p, dens.p)
+layout <- matrix(c(1:4), nrow=2, ncol =2, byrow = T)
+
+grid.arrange(grobs = plots, layout_matrix = layout)
+
+
+```
+
+What are the means of w and p?
+```{r}
+means <- c(w = mean(mon.w), p = mean(mon.p))
+print(means)
+```
+
+What are the column means of the Z's?
+```{r}
+
+mean.Z <- mean(apply(mon.Z, 2, mean))
+print(mean.Z)
+
+
+```
+
+What are the upper and lower credible intervals for p and w?
+```{r}
+
+quants <- c(p.mean = means["p"],
+            p.lower = quantile(mon.p, .025),
+            p.upper = quantile(mon.p, .975),
+            w.mean = means["w"],
+            w.lower = quantile(mon.w, .025),
+            w.upper = quantile(mon.w, .975))
+
+print(quants)
+
+
+```
+
+We can conclude that given you are a drinker, there is a probability of .4546 that you will be drinking
+on any given day of the week. 
+
+As for w, we can say that the estimated proportion of drinkers in the population is .7849655
+
+#Adding the posterior predictive distribution to the model
+
+```{r}
+post.p <- quants[1]
+post.w <- quants[4]
+
+# No. Replications
+B = n.iter
+
+post.preds.z0 <- replicate(B, {
+  # sample Z 
+  Z.post.pred <- rbinom(100,1, post.w)
+  # sample X
+  X.post.pred <- rbinom(100,7, post.p)
+  # if z==0, x==0
+  X.post.pred[Z.post.pred==0] <- 0
+  
+  sum(X.post.pred==0)
+})
+```
+
+Let's check the mean and quantiles for the number of zeros
+
+```{r}
+
+quants.z0 <- c(lower = quantile(post.preds.z0, .025),
+               mean = mean(post.preds.z0),
+               upper = quantile(post.preds.z0, .975))
+
+print(quants.z0)
+```
+
+Inspect the histogram of sampled zeros
+
+```{r}
+data.frame(post.preds.z0) %>%  ggplot(aes(post.preds.z0)) + geom_histogram()
+
+```
+What does the posterior predictive distribution look like? 
+
+
+```{r}
+hist(X, breaks = seq(-.25, 7.25, .5),
+     col = "plum",
+     ylim = c(0,40),
+     main = "Hist(Post Predictive Dist)", xlab = "Drinking Days") 
+# Arrows for the old beta-binomial model
+arrows(0.1,5,0.1,19, angle=90, lwd = 2, col = "blue", code = 3, length = .1)
+points(.1, 11.732, pch = 16, col = "blue", cex=2)
+
+# Arrows for the new beta-binomial model
+arrows(0-.1, quantile(post.preds.z0, .025),
+       0-.1, quantile(post.preds.z0, .975),
+       angle = 90, lwd = 2, col = "blue", code = 3, length = .1)
+points(0-.1, mean(post.preds.z0), pch=16, col = "black", cex=2)
+
+
+```
+Under the old Beta Binomial model, the excess zeros weren't modeled correctly. Under the new model we see that it is. 
+
+

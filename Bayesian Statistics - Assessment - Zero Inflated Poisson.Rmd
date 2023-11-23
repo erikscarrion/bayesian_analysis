@@ -1,0 +1,239 @@
+---
+title: "Assessment - Zero Inflated Poisson Model"
+output: html_notebook
+---
+In a national park, 100 tourists were asked how many fish they have caught during their visit. Their 
+responses can be found in the data set fish.csv. First we'll load and inspect the distribution of the data. 
+
+```{r}
+# Load dependencies & data
+library(tidyverse)
+library(gridExtra)
+fish <- read.csv("fish.csv") %>% filter(is.na(catch)==F)
+N = dim(fish)[1]
+# Inspect the data
+fish %>% ggplot(aes(catch)) + geom_histogram() + ggtitle("Distribution of Caught Fish")
+```
+We see the number of people responding with zero is significantly larger than 
+expected under a Poisson model, so we should be employing a zero-inflated poisson model. 
+Before doing so, we'll run a simple Gamma Poisson Model to determine the probability of 
+seeing as many zeros as we observed. 
+
+Fit a simple gamma-poisson model and determine the posterior predictive probability p, 
+that a sample of 94 people will have at least as many zeros as were observed.
+
+```{r}
+
+# Gamma Posterior Parameters
+a.post <- .001+sum(fish$catch)
+b.post <- .001+N
+
+post.mean = a.post/b.post
+round(post.mean)
+
+# Number of Iterations
+B = 10^3
+
+# Set the seed
+set.seed(12345, sample.kind="Rounding")
+
+# Sample data from the posterior conditional distribution 
+fish.zeros <- replicate(B, {
+  # Sample 94 observations using the posterior mean then count & store the # of zeros in the sample
+  x <- rpois(94, post.mean)
+  sum(x==0)
+})
+```
+
+What proportion of the observed samples had as many zeros as we observed?
+```{r}
+# What proportion of our sample saw at least the number of zeros observed in the survey
+sum(fish.zeros > sum(fish$catch==0))
+```
+
+Given the results of our simulation, the probability of seeing AS many zeros as we did in a sample 
+of 94 tourists is p < .001. 
+
+To account for the excess zeros, we now develop a Zero-Inflated-Poisson (ZIP) model which takes 
+into account the latent variable, Z, which is 0 or 1 depending on if the person surveyed fished that 
+day. 
+
+Because we are modelling excess zeros, we consider p as the probability that Z=0 - i.e. that a rand-
+omly surveyed person at the park did NOT fish that day
+
+Priors for Z, p, and mu. 
+    Zi ~ Bernoulli(w) // The Joint Distribution of ALL Zi's ~ Binomial(N, w)
+    w  ~ Beta(1,1)
+    MU ~ Gamma(.001,.001)
+    X ~ Poisson(Mu)
+
+```{r}
+# Number of iterations
+B = 10^4
+
+# monitors for p and mu
+pz1.storage <- w.storage <- mu.storage <- numeric(B)
+Z.storage <- array(dim = c(94,B))
+
+# Initialize Z, X
+X <- fish$catch
+Z <- (X>0)*1
+```
+
+
+``` {r}
+# Priors for w, mu
+# w ~ beta(1,1)
+# mu ~ gamma(.001,.001)
+
+# set.seed
+set.seed(12345, sample.kind  = "Rounding")
+for(i in 1:B){
+  # given Z, sample w
+  a.beta <- 1 + sum(Z)
+  b.beta <- 1 + N - sum(Z)
+  
+  w <- rbeta(1, a.beta, b.beta)
+  
+  # Given Z, X sample mu
+  a.gamma <- .001 + sum(X)
+  b.gamma <- .001 + sum(Z)
+
+  mu <- rgamma(1, a.gamma, b.gamma)
+  
+  # Given Z,X,& mu sample X
+  X <- rpois(N, mu)
+  
+  # Given Z,X, mu, w sample Z
+  pz1 <-  1*mean(X>0) + (exp(-mu)*w)/((exp(-mu)*w) + 1 - w)*mean(X==0)
+  Z <- rbinom(N, 1, pz1)
+  
+  X[Z==0] <- 0
+  
+
+  # update monitors
+  pz1.storage[i] <- pz1
+  w.storage[i] <- w
+  mu.storage[i] <- mu
+  Z.storage[,i] <- Z
+}
+
+```
+
+What do the results of our simulation tell us about the distribution of w, mu, Z, and X?
+
+```{r}
+burn <- floor(.20*B)
+keep <- B-burn
+filter <- rep(c(0,1), c(burn,keep))
+
+print("Summary of Mu - No Burn")
+summary(mu.storage)
+print("Summary of Mu - After Burning 1st 20% of Iterations")
+summary(mu.storage[filter])
+print("Summary of W - No Burn")
+summary(w.storage)
+print("Summary of W - After Burning 1st 20% of Iterations")
+summary(w.storage[filter])
+print("Summary of P(Z==1|X==0) - No Burn")
+summary(pz1.storage)
+print("Summary of P(Z==1|X==0) - After Burning 1st 20% of Iterations")
+summary(pz1.storage[filter])
+```
+What do the trace and density plots for mu and w look like?
+
+```{r}
+# Set up the data frame and the plots
+params.df <- data.frame(iter = 1:B, 
+                        MU  = mu.storage,
+                        W = w.storage)
+
+trace.mu <- params.df %>% ggplot(aes(iter,MU)) + geom_line() + ggtitle("Trace of MU")
+dense.mu <- params.df %>% ggplot(aes(MU)) + geom_density() + ggtitle("Desnity of MU")
+trace.w <- params.df %>% ggplot(aes(iter,W)) + geom_line() + ggtitle("Trace of W")
+dense.w <- params.df %>% ggplot(aes(W)) + geom_density() + ggtitle("Desnity of W")
+
+my.plots <- list(trace.mu, dense.mu, trace.w, dense.w)
+my.layout <- matrix(1:4, nrow=2, ncol=2, byrow = T)
+
+```
+
+```{r}
+# Display the plots
+
+grid.arrange(grobs=my.plots,layout_matrix=my.layout, top = "Mu & W Before Burning")
+```
+
+Our summary statistics suggest convergence. However, what do the plots look like after we burn them?
+
+```{r}
+# Set up the dataframe and plots
+burned.df <- data.frame(iter = 801:1000, 
+                        MU  = mu.storage[filter],
+                        W = w.storage[filter])
+
+trace.mu.b <- burned.df %>% ggplot(aes(iter,MU)) + geom_line() + ggtitle("Trace of MU")
+dense.mu.b <- burned.df %>% ggplot(aes(MU)) + geom_density() + ggtitle("Desnity of MU")
+trace.w.b <- burned.df %>% ggplot(aes(iter,W)) + geom_line() + ggtitle("Trace of W")
+dense.w.b <- burned.df %>% ggplot(aes(W)) + geom_density() + ggtitle("Desnity of W")
+
+my.plots.b <- list(trace.mu.b, dense.mu.b, trace.w.b, dense.w.b)
+my.layout.b <- matrix(1:4, nrow=2, ncol=2, byrow = T)
+```
+
+```{r}
+# Display the plots
+grid.arrange(grobs=my.plots.b,layout_matrix=my.layout.b, top = "Mu & W After Burning")
+```
+
+
+```{r}
+# Based on Samples
+post.mu <- mu.storage[filter] %>% mean()
+post.w <- w.storage[filter] %>% mean()
+
+# Posterior predictive distribution of the number of zeros
+
+post.pred.zeros <- replicate(B, {
+  Z <- rbinom(N, 1, post.w)
+  X <- rpois(N, post.mu)
+  X[Z==0] <- 0
+  sum(X==0)
+
+})
+
+zeros.df <- data.frame(zeros = post.pred.zeros)
+
+# Distribution of Zeros
+zeros.df %>% ggplot(aes(zeros)) + geom_density() + labs(title = "Posterior Distribution for # of Zeros")
+
+```
+Now, we ask what is the probability of observing at least as many zeros as observed
+
+```{r}
+# Distribution of Zeros using the data
+Z.d <- (fish$catch > 0)*1
+post.mu.d <- (.001+sum(fish$catch))/(.001+sum(Z.d))
+post.w.d <- (1+sum(Z.d))/((1+sum(Z.d)) + 1+94-sum(Z.d))
+
+post.pred.zeros.d <- replicate(B, {
+  X <- rpois(N, post.mu.d)
+  Z <- rbinom(N, 1, post.w.d)
+  X[Z==0]<-0
+  sum(X==0)
+})
+
+zeros1.df <- data.frame(zeros = post.pred.zeros.d) 
+zeros1.df %>% ggplot(aes(zeros))+geom_density()+ggtitle("Predicted Zeros - using Data")
+
+```
+```{r}
+summary(post.pred.zeros.d); post.mu.d
+```
+```{r}
+# Posterior predictive probability that a sample of 94 will have at least as many zeros as we observed
+# 
+# 
+mean(post.pred.zeros.d>=27)
+```
+

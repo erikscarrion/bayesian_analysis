@@ -1,0 +1,126 @@
+---
+title: "Assessment 2 - Birds"
+subtitle: "Metropolis-Hastings"
+author: "Erik Carrion"
+date: "4-20-2023"
+output: html_notebook
+---
+
+Ornothologists are interested in the ratio of female bird chicks to male bird chicks
+From past studies, they know that the probability of a female is distributed Beta(20,20)
+If x is the number of female chicks that hatch, then x|p <- Binomial(n, p)
+Further, the total hatch size is Poisson(mu = 12).
+
+
+Construct an MCMC algorithm which will estimate the posterior distributions from p and n
+First, derive the posterior conditional distributions analytically
+Then, using your analytical results, derive the estimated distributions.
+
+Distributions: 
+      p ~ Beta(20,20) = p^19 * (1-p)^19
+      x|p ~ Binomial(N, p) = choice(n,x) * (p^x) * (1-p)^(n-x)
+      n ~ Poisson(12) = (12^n) * exp(-12) / fact(n)
+
+Posterior Conditional Distributions:
+    p|x,n ~ Beta(20 + x, 20 + n - x)
+    n|x,p = (12 * (1-p))^(n-x) * exp(-12 * (1-p))/fact(n-x)
+```{r}
+# Load dependencies
+library(tidyverse)
+library(gridExtra)
+```
+
+ 
+
+```{r}
+# Set Seed
+set.seed(12345, sample.kind = "Rounding")
+
+# Set Number of Iterations
+B <- 10^3
+
+# Initialize the model
+a0 <- b0 <- 20
+lambda <- 12
+p <- 1/6
+N <- rpois(1,lambda)
+X <- 1
+
+# Parameter Storage
+p.storage <- X.storage <- N.storage <- numeric(B)
+
+# Start Iterating
+for(i in 1:B){
+  # Given N, p, X sample a new p
+  p <- rbeta(1, a0 + X, b0 + N - X)
+  
+  # Sample N
+  vals <- 6:25
+  prob.N <- (12*(1-p))^(vals) / factorial(vals-1)
+  N <- sample(6:25, 1, T, prob.N)
+  
+  # Given the new values of N and P, sample X
+  X <- sum(rbinom(N, 1, p))
+  
+  # Update the monitors
+  p.storage[i] <- p
+  X.storage[i] <- mean(X)
+  N.storage[i] <- N
+}
+```
+``` {r}
+# data frame for monitors
+
+df <- data.frame(iter = 1:B,
+                 p = p.storage,
+                 N = N.storage, 
+                 X = X.storage)
+
+# Visualize the distribution of p, n, and X
+
+p.hist <- df %>% ggplot(aes(p)) + geom_histogram() + ggtitle("Hist(p)")
+N.hist <- df %>% ggplot(aes(N)) + geom_histogram() + ggtitle("Hist(N)")
+X.hist <- df %>% ggplot(aes(X)) + geom_histogram() + ggtitle("Hist(X)")
+
+p.hist; N.hist; X.hist
+
+
+```
+
+
+
+```{r}
+summary(df)
+
+```
+
+# Questions: 
+  1. What is the most likely estimated egg batch size, N
+  2. What is the posterior probability associated with that egg batch size
+  3. What is the posterior mean for p
+  4. What is the posterior mean for p under a simple beta-binomial with n = 6
+  
+```{r}
+
+# Q1
+mean.N <- mean(N.storage);
+
+# Q2
+mean.N.8 <- mean(N.storage == 8);
+
+# Q3
+a1 <- a0+1
+b1 <- a0+8-1
+post.mean.p <- a1/(a1+b1)
+post.mean.p;
+
+# Q4
+post.mean.p.bb <- (20+1)/(20+1 + 20+6-1)
+
+mean.N;mean.N.8;
+post.mean.p;post.mean.p.bb
+
+
+```
+  
+  

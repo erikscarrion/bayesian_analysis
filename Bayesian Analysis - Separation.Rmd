@@ -1,0 +1,172 @@
+---
+title: "Dealing with Complete Separation"
+subtitle: "Frequentist Approach vs. Bayesian Approach"
+author: "Erik Carrion"
+date: "24 April 2023"
+output: html_notebook
+---
+options(mc.cores = parallel::detectCores())
+```{r}
+# Load dependencies
+library(tidyverse)
+library(MCMCglmm)
+library(rstanarm)
+```
+
+
+
+```{r}
+# Load and inspect data
+d <- read.csv("study.csv")
+summary(d)
+```
+
+Let's fit a frequentist model to see what types of results that we get
+```{r}
+
+m0 <- glm(y~HoursOfStudy, data=d, family = "binomial")
+summary(m0)
+
+
+```
+As we can see, we get very large standard errors for the intercept and slope with very large P-Values and so this particular model can't be trusted. 
+
+Now, we'll fit a bayesion model to see how it compares.
+
+```{r}
+set.seed(12345, sample.kind="Rounding")
+m1 <- MCMCglmm(y~HoursOfStudy, data=d, family="categorical")
+summary(m1)
+```
+
+## The Chase Dataset
+
+```{r}
+# Load and inspect data
+chase <- read.csv("thechase.txt")
+summary(chase)
+```
+Let's inspect how well Mark does. 
+
+```{r}
+mark <- chase %>% filter(Chaser=="Mark")
+
+mark %>% ggplot(aes(TeamScore,jitter(Win))) + geom_point() +
+  scale_y_continuous(name="",breaks=c(0,1),labels = c("Lose", "Win")) +
+  xlim(c(0,30))
+                  
+```
+What does the graph show us? Well, when the chaser is Mark, most scores seem to fall between 10 and 25. Predictably, 
+higher scores imply a win. How can we model this? 
+
+First off, y.i is obviously a binomial response. Further, if we model the logit, then we can model B0 and B1 as having normal priors with mean 0 and tau 10e-8
+
+```{r}
+# fit a stan_glm model
+m1 <- stan_glm(Win ~ TeamScore, data=mark, family=binomial(link="logit"),
+               prior = normal(location = 0, scale = 10e4),
+               prior_intercept = normal(location = 0, scale = 10e4),
+               chains = 1, iter = 1500, refresh = 0)
+
+m1post <- as.data.frame(m1)
+par(mfrow=c(2,2))
+plot(m1post[,1],ty='l',ylab=expression(beta[0]))
+plot(density(m1post[,1]),xlab=expression(beta[0]),main='')
+plot(m1post[,2],ty='l',ylab=expression(beta[1]))
+plot(density(m1post[,2]),xlab=expression(beta[1]),main='')
+```
+Looking to the summaries
+
+```{r}
+df.summary <- data.frame(
+p.means = round(apply(m1post,2,mean),4),
+p.ci.lo = round(apply(m1post,2,quantile,.025),4),
+p.ci.hi = round(apply(m1post,2,quantile,.975),4))
+
+print(df.summary)
+```
+How do the log-odds of winning change as the scores increase?
+
+```{r}
+
+summary(m1)
+m1$coefficients
+
+scoregrid <- seq(0,30)
+p.eval <- function(score, b0, b1){1 / (1 + exp(-(b0 + b1*score)))}
+p.sample <- sapply(scoregrid, p.eval,b0= m1post[,1], b1= m1post[,2])
+p.post.mean <- apply(p.sample,2,mean)
+p.post.sd <- apply(p.sample,2,sd)
+data.post <- data.frame(score=scoregrid,p=p.post.mean, sd = p.post.sd) %>% mutate(prob.lo = p - 1.96*sd,
+                                                                                  prob.hi = p + 1.96*sd)
+
+mark.plot <-mark %>% ggplot(aes(TeamScore,jitter(Win))) + geom_point() +
+  scale_y_continuous(name="",breaks=c(0,1),labels = c("Lose", "Win")) +
+  xlim(c(0,30)) + geom_line(data= data.post, aes(x=score,y=p), color="red")
+
+
+```
+Now, let's fit a bayesian binomial glm to jenny's data and see how she differs from mark
+```{r}
+jenny <- chase %>% filter(Chaser=="Jenny")
+# summary(jenny)
+set.seed(12345, sample.kind="Rounding")
+m2 <- stan_glm(Win~TeamScore, data =jenny, 
+               family = binomial(link="logit"),
+               prior = normal(location = 0, scale = 1e3),
+               prior_intercept = normal(location = 0, scale = 1e3),
+               chains = 1, iter = 1500)
+summary(m2)
+```
+Now we'll visualize Jenny's data and her fitted model to see how well she does compared to mark.
+```{r}
+m2.post <- as.data.frame(m2)
+# summary(m2.post)
+
+jenny.p.sample <- sapply(scoregrid, p.eval,b0 = m2.post[,1], b1 = m2.post[,2])
+jenny.post.mean <- apply(jenny.p.sample, 2, mean)
+jenny.post.sd <- apply(jenny.p.sample, 2, sd)
+jenny.data.post <- data.frame(score = scoregrid, prob = jenny.post.mean)
+
+jenny.plot <- jenny %>% ggplot(aes(TeamScore, jitter(Win))) + geom_point() +
+  scale_y_continuous(name ="", breaks=c(0,1), labels = c("Lose", "Win")) +
+  xlim(c(0,30)) + geom_line(data = jenny.data.post, aes(x=score,y=prob), color="red")
+
+jenny.plot + geom_line(data = data.post, aes(x=score,y=p), color="black") +
+  geom_point(data=mark, aes(x=TeamScore, y = jitter(Win)),color="green4")
+
+```
+
+```{r}
+data.post <- data.post  %>% mutate(prob.lo = p - 1.96*sd(p))
+head(data.post)
+```
+
+
+
+Check the 95% credible intervals for each and determine whose intervals are larger
+
+```{r}
+jenny.data.post <- jenny.data.post %>% mutate(prob.lo = jenny.post.mean - 1.96*jenny.post.sd,
+                                              prob.hi = jenny.post.mean + 1.96*jenny.post.sd)
+
+ggplot(data = jenny, aes(TeamScore, jitter(Win))) +
+  geom_point(color = "green4") + 
+  geom_line(data = jenny.data.post, aes(x = score, y = prob), col = "red", inherit.aes = F) +
+  geom_ribbon(data = jenny.data.post, aes(x = score, ymin=prob.lo, ymax=prob.hi), 
+              fill = "lightblue", alpha = 0.7, inherit.aes = F)
+
+
+ggplot(data = mark, aes(TeamScore, jitter(Win))) +
+  geom_point(color = "green4") + 
+  geom_ribbon(data = data.post, aes(x = score, ymin = prob.lo, ymax=prob.hi),
+              col = "red",
+              alpha = 0.5,
+              inherit.aes = F) +
+  geom_ribbon(data = jenny.data.post,
+              aes(x = score,  ymin = prob.lo, ymax=prob.hi), 
+              col = "blue",
+              alpha = 0.6,
+              inherit.aes = F)
+  ```
+
